@@ -432,7 +432,7 @@ export async function writeReportWithGemini(
       untrustedCodeSnippet: `<<<UNTRUSTED_CODE_SNIPPET_START>>>\n${(f.evidence || '').slice(0, 300)}\n<<<UNTRUSTED_CODE_SNIPPET_END>>>`,
     }));
 
-    const systemInstruction = `You are the Report Writer for "Vibe Code Health Scanner" for non-developers who built apps with AI tools.
+    const systemInstruction = `You are the Report Writer for "Tumorr" for non-developers who built apps with AI tools.
 
 AGENT RULES (NON-NEGOTIABLE):
 1. Read-only in v1. The agent never modifies a repo.

@@ -25,8 +25,8 @@ export const Navbar: React.FC<NavbarProps> = ({
             <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#F2E9DF]" />
           </div>
           <span className="font-headline font-semibold text-[#F2E9DF] text-sm sm:text-base tracking-tight whitespace-nowrap">
-            <span className="sm:hidden">Vibe Scanner</span>
-            <span className="hidden sm:inline">Vibe Code Health Scanner</span>
+            <span className="sm:hidden">Tumorr</span>
+            <span className="hidden sm:inline">Tumorr</span>
           </span>
         </button>
 

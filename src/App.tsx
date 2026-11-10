@@ -1041,7 +1041,7 @@ export default function App() {
       <footer className="border-t border-[#382D25] bg-[#14100D] py-6 mt-12 text-center text-xs text-[#A39382]">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-3">
           <p>
-            Vibe Code Health Scanner • Deterministic inspection for vibe-coded applications
+            Tumorr • Deterministic inspection for vibe-coded applications
           </p>
           <div className="flex items-center gap-4 text-[#A39382]">
             <button

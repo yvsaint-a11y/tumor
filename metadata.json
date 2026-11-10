@@ -1,6 +1,6 @@
 {
-  "name": "Vibe Code Health Scanner",
-  "description": "Deterministic security & health audit scanner for vibe-coded React and Python apps with plain-English AI explanations.",
+  "name": "tumorr",
+  "description": "Deterministic security & health audit scanner for vibe-coded and AI-built apps with plain-English AI explanations.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -20,7 +20,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // Task 3: Configure trust proxy to 1 (trust 1st fronting reverse proxy like Cloud Run / Nginx / Vercel)
 // This ensures req.ip resolves to the true client IP from X-Forwarded-For rather than the load balancer
@@ -360,7 +360,7 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     const hasGithubToken = Boolean(process.env.GITHUB_TOKEN && process.env.GITHUB_TOKEN.trim().length > 0);
     console.log(`[Startup] GITHUB_TOKEN configured: ${hasGithubToken}`);
-    console.log(`Vibe Code Health Scanner server running at http://0.0.0.0:${PORT}`);
+    console.log(`Tumorr server running at http://0.0.0.0:${PORT}`);
   });
 }
 
