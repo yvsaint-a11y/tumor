@@ -79,6 +79,7 @@ export interface RubricScore {
 
 export interface ScanReport {
   id: string;
+  shareId?: string;
   repoUrl: string;
   repoName: string;
   branch: string;

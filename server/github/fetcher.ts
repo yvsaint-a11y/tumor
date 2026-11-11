@@ -85,17 +85,55 @@ export function isScannableFile(path: string): boolean {
   return false;
 }
 
+export const ALLOWED_OUTBOUND_HOSTS = new Set([
+  'api.github.com',
+  'raw.githubusercontent.com',
+  'registry.npmjs.org',
+  'pypi.org',
+  'api.osv.dev',
+  'generativelanguage.googleapis.com',
+]);
+
+export function assertAllowedOutboundHost(urlStr: string): void {
+  try {
+    const parsed = new URL(urlStr);
+    if (!ALLOWED_OUTBOUND_HOSTS.has(parsed.hostname.toLowerCase())) {
+      throw new Error(`Outbound network call to unauthorized host "${parsed.hostname}" is blocked.`);
+    }
+  } catch (err: any) {
+    if (err.message.includes('blocked')) throw err;
+    throw new Error(`Invalid outbound URL: ${urlStr}`);
+  }
+}
+
+const IDENTIFIER_REGEX = /^[a-zA-Z0-9_.-]+$/;
+
 export function parseGitHubUrl(input: string): { owner: string; repo: string } | null {
-  const clean = input.trim().replace(/\/$/, '');
-  
-  if (/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(clean)) {
-    const [owner, repo] = clean.split('/');
-    return { owner, repo };
+  if (!input || typeof input !== 'string') return null;
+  const trimmed = input.trim();
+  // Enforce max 200 characters
+  if (trimmed.length > 200 || trimmed.length === 0) return null;
+
+  // Handle owner/repo shorthand
+  if (/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(trimmed)) {
+    const [o, r] = trimmed.split('/');
+    if (IDENTIFIER_REGEX.test(o) && IDENTIFIER_REGEX.test(r)) {
+      return { owner: o, repo: r };
+    }
+    return null;
   }
 
-  const match = clean.match(/github\.com\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)/i);
-  if (match) {
-    return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
+  // Strict URL regex for github.com/<owner>/<repo>(.git)?(/tree/<branch>)?(/)?
+  const urlMatch = trimmed.match(
+    /^(?:https?:\/\/)?(?:www\.)?github\.com\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+?)(?:\.git)?(?:\/tree\/[^\/\s]+)?\/?$/i
+  );
+
+  if (urlMatch) {
+    const owner = urlMatch[1];
+    const repo = urlMatch[2].replace(/\.git$/i, '');
+    if (IDENTIFIER_REGEX.test(owner) && IDENTIFIER_REGEX.test(repo)) {
+      return { owner, repo };
+    }
   }
 
   return null;
@@ -191,7 +229,11 @@ function handleGitHubRateLimit(headers: Headers): string {
   return 'GitHub API rate limit encountered.';
 }
 
-export async function fetchRepository(repoInput: string, sampleId?: string): Promise<FetchResult> {
+export async function fetchRepository(
+  repoInput: string,
+  sampleId?: string,
+  signal?: AbortSignal
+): Promise<FetchResult> {
   // Check if sample repo was requested
   if (sampleId && SAMPLE_REPOS[sampleId]) {
     const sample = SAMPLE_REPOS[sampleId];
@@ -234,7 +276,7 @@ export async function fetchRepository(repoInput: string, sampleId?: string): Pro
 
   const headers: Record<string, string> = {
     'Accept': 'application/vnd.github.v3+json',
-    'User-Agent': 'VibeCodeHealthScanner/2.0',
+    'User-Agent': 'Tumorr/1.0',
   };
 
   const hasToken = Boolean(process.env.GITHUB_TOKEN && process.env.GITHUB_TOKEN.trim().length > 0);
@@ -248,7 +290,8 @@ export async function fetchRepository(repoInput: string, sampleId?: string): Pro
 
   try {
     const repoInfoUrl = `https://api.github.com/repos/${owner}/${repo}`;
-    const repoInfoRes = await fetch(repoInfoUrl, { headers });
+    assertAllowedOutboundHost(repoInfoUrl);
+    const repoInfoRes = await fetch(repoInfoUrl, { headers, signal });
     console.log(
       `[GitHub API] GET /repos/${owner}/${repo} | GITHUB_TOKEN present: ${hasToken} | x-ratelimit-limit: ${
         repoInfoRes.headers.get('x-ratelimit-limit') || 'unknown'
@@ -267,6 +310,7 @@ export async function fetchRepository(repoInput: string, sampleId?: string): Pro
     const repoInfo = (await repoInfoRes.json()) as any;
     defaultBranch = repoInfo.default_branch || 'main';
   } catch (err: any) {
+    if (signal?.aborted) throw err;
     if (err.message.includes('rate limit') || err.message.includes('not found')) {
       throw err;
     }
@@ -276,7 +320,8 @@ export async function fetchRepository(repoInput: string, sampleId?: string): Pro
   // Fetch branch commit SHA for caching
   try {
     const branchUrl = `https://api.github.com/repos/${owner}/${repo}/branches/${defaultBranch}`;
-    const branchRes = await fetch(branchUrl, { headers });
+    assertAllowedOutboundHost(branchUrl);
+    const branchRes = await fetch(branchUrl, { headers, signal });
     console.log(
       `[GitHub API] GET /repos/${owner}/${repo}/branches/${defaultBranch} | GITHUB_TOKEN present: ${hasToken} | x-ratelimit-limit: ${
         branchRes.headers.get('x-ratelimit-limit') || 'unknown'
@@ -287,13 +332,15 @@ export async function fetchRepository(repoInput: string, sampleId?: string): Pro
       const branchData = (await branchRes.json()) as any;
       commitSha = branchData.commit?.sha || '';
     }
-  } catch {
+  } catch (err: any) {
+    if (signal?.aborted) throw err;
     commitSha = '';
   }
 
   // Fetch Git Tree recursively
   const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${defaultBranch}?recursive=1`;
-  const treeRes = await fetch(treeUrl, { headers });
+  assertAllowedOutboundHost(treeUrl);
+  const treeRes = await fetch(treeUrl, { headers, signal });
   console.log(
     `[GitHub API] GET /repos/${owner}/${repo}/git/trees/${defaultBranch} | GITHUB_TOKEN present: ${hasToken} | x-ratelimit-limit: ${
       treeRes.headers.get('x-ratelimit-limit') || 'unknown'
@@ -307,14 +354,15 @@ export async function fetchRepository(repoInput: string, sampleId?: string): Pro
     // Try master fallback
     if (defaultBranch === 'main') {
       const fallbackUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/master?recursive=1`;
-      const fallbackRes = await fetch(fallbackUrl, { headers });
+      assertAllowedOutboundHost(fallbackUrl);
+      const fallbackRes = await fetch(fallbackUrl, { headers, signal });
       console.log(
         `[GitHub API] GET /repos/${owner}/${repo}/git/trees/master (fallback) | GITHUB_TOKEN present: ${hasToken} | x-ratelimit-limit: ${
           fallbackRes.headers.get('x-ratelimit-limit') || 'unknown'
         }`
       );
       if (fallbackRes.ok) {
-        return processGitTree(owner, repo, 'master', commitSha || 'master-head', await fallbackRes.json(), headers, warnings);
+        return processGitTree(owner, repo, 'master', commitSha || 'master-head', await fallbackRes.json(), headers, warnings, signal);
       }
     }
     throw new Error(`Failed to read repository tree: ${treeRes.statusText}`);
@@ -325,7 +373,7 @@ export async function fetchRepository(repoInput: string, sampleId?: string): Pro
     commitSha = treeData.sha || `${owner}/${repo}/${defaultBranch}`;
   }
 
-  return processGitTree(owner, repo, defaultBranch, commitSha, treeData, headers, warnings);
+  return processGitTree(owner, repo, defaultBranch, commitSha, treeData, headers, warnings, signal);
 }
 
 async function processGitTree(
@@ -335,7 +383,8 @@ async function processGitTree(
   commitSha: string,
   treeData: any,
   headers: Record<string, string>,
-  warnings: string[]
+  warnings: string[],
+  signal?: AbortSignal
 ): Promise<FetchResult> {
   const treeNodes: Array<{ path: string; size?: number; url: string; type: string }> = treeData.tree || [];
   const allBlobs = treeNodes.filter((n) => n.type === 'blob');
@@ -443,23 +492,31 @@ async function processGitTree(
     }
   }
 
-  // Fetch contents in parallel batches of 10
+  // Cap total bytes fetched across scan at 15 MB
+  const MAX_SCAN_BYTES = 15 * 1024 * 1024;
+  let totalBytesFetched = 0;
+
+  // Fetch contents in parallel batches of 8 (Requirement 2: cap parallel fetches at 8)
   const files: RepoFile[] = [];
   let totalLines = 0;
-  const batchSize = 10;
+  const batchSize = 8;
 
   for (let i = 0; i < selected.length; i += batchSize) {
+    signal?.throwIfAborted();
     const batch = selected.slice(i, i + batchSize);
     const results = await Promise.all(
       batch.map(async (item) => {
         try {
+          signal?.throwIfAborted();
           const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${item.path}`;
-          const rawHeaders: Record<string, string> = { 'User-Agent': 'VibeCodeHealthScanner/2.0' };
+          assertAllowedOutboundHost(rawUrl);
+          const rawHeaders: Record<string, string> = { 'User-Agent': 'Tumorr/1.0' };
           if (headers['Authorization']) {
             rawHeaders['Authorization'] = headers['Authorization'];
           }
           const rawRes = await fetch(rawUrl, {
             headers: rawHeaders,
+            signal,
           });
 
           if (rawRes.ok) {
@@ -468,7 +525,8 @@ async function processGitTree(
           }
 
           // Fallback to blob API
-          const blobRes = await fetch(item.url, { headers });
+          assertAllowedOutboundHost(item.url);
+          const blobRes = await fetch(item.url, { headers, signal });
           if (blobRes.ok) {
             const blobData = (await blobRes.json()) as any;
             if (blobData.encoding === 'base64') {
@@ -477,7 +535,8 @@ async function processGitTree(
             }
           }
           return null;
-        } catch {
+        } catch (err: any) {
+          if (signal?.aborted) throw err;
           return null;
         }
       })
@@ -485,6 +544,11 @@ async function processGitTree(
 
     for (const res of results) {
       if (res && res.content) {
+        const byteLen = Buffer.byteLength(res.content, 'utf8');
+        totalBytesFetched += byteLen;
+        if (totalBytesFetched > MAX_SCAN_BYTES) {
+          throw new Error('Repository scan exceeded the 15 MB payload limit.');
+        }
         files.push(res);
         totalLines += res.content.split('\n').length;
       }

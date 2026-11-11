@@ -2,6 +2,8 @@ import semver from 'semver';
 import path from 'path';
 import { Finding } from '../../src/types/scanner.js';
 import { RepoFile } from '../github/sampleRepos.js';
+import { BoundedLruCache } from '../cache.js';
+import { assertAllowedOutboundHost } from '../github/fetcher.js';
 
 interface ResolvedPackage {
   name: string;
@@ -76,20 +78,22 @@ interface OsvBatchResponse {
   }>;
 }
 
-// In-memory caches to prevent repeated network registry and advisory calls
-const npmVersionsCache = new Map<string, string[]>();
-const pypiVersionsCache = new Map<string, string[]>();
-const osvVulnDetailCache = new Map<string, OsvVulnDetail>();
+// Bounded LRU caches (max 50 entries, 1h TTL) to prevent memory growth
+const npmVersionsCache = new BoundedLruCache<string, string[]>(50, 60 * 60 * 1000);
+const pypiVersionsCache = new BoundedLruCache<string, string[]>(50, 60 * 60 * 1000);
+const osvVulnDetailCache = new BoundedLruCache<string, OsvVulnDetail>(50, 60 * 60 * 1000);
 
 async function fetchOsvDetail(vulnId: string): Promise<OsvVulnDetail | null> {
   const cached = osvVulnDetailCache.get(vulnId);
   if (cached) return cached;
 
   try {
+    const url = `https://api.osv.dev/v1/vulns/${encodeURIComponent(vulnId)}`;
+    assertAllowedOutboundHost(url);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 6000);
-    const res = await fetch(`https://api.osv.dev/v1/vulns/${encodeURIComponent(vulnId)}`, {
-      headers: { 'User-Agent': 'VibeCodeHealthScanner/2.0' },
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Tumorr/1.0' },
       signal: controller.signal,
     });
     clearTimeout(timeout);
@@ -344,12 +348,14 @@ async function resolveNpmRange(
   try {
     let versions = npmVersionsCache.get(pkgName);
     if (!versions) {
+      const url = `https://registry.npmjs.org/${encodeURIComponent(pkgName)}`;
+      assertAllowedOutboundHost(url);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 4000);
-      const res = await fetch(`https://registry.npmjs.org/${encodeURIComponent(pkgName)}`, {
+      const res = await fetch(url, {
         headers: {
           Accept: 'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8',
-          'User-Agent': 'VibeCodeHealthScanner/2.0',
+          'User-Agent': 'Tumorr/1.0',
         },
         signal: controller.signal,
       });
@@ -386,10 +392,12 @@ async function resolvePypiRange(
   try {
     let versions = pypiVersionsCache.get(pkgName.toLowerCase());
     if (!versions) {
+      const url = `https://pypi.org/pypi/${encodeURIComponent(pkgName)}/json`;
+      assertAllowedOutboundHost(url);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 4000);
-      const res = await fetch(`https://pypi.org/pypi/${encodeURIComponent(pkgName)}/json`, {
-        headers: { 'User-Agent': 'VibeCodeHealthScanner/2.0' },
+      const res = await fetch(url, {
+        headers: { 'User-Agent': 'Tumorr/1.0' },
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -599,12 +607,14 @@ async function queryOsvBatch(
     }));
 
     try {
+      const url = 'https://api.osv.dev/v1/querybatch';
+      assertAllowedOutboundHost(url);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 6000);
 
-      const res = await fetch('https://api.osv.dev/v1/querybatch', {
+      const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'User-Agent': 'Tumorr/1.0' },
         body: JSON.stringify({ queries }),
         signal: controller.signal,
       });
@@ -802,8 +812,8 @@ export async function scanDependencies(
         }
       }
 
-      // Batch lookups with Promise.all in chunks of 15
-      const NPM_BATCH_SIZE = 15;
+      // Batch lookups with Promise.all in chunks of 8 (Requirement 2: cap parallel fetches at 8)
+      const NPM_BATCH_SIZE = 8;
       for (let i = 0; i < allDepEntries.length; i += NPM_BATCH_SIZE) {
         const chunk = allDepEntries.slice(i, i + NPM_BATCH_SIZE);
         const resolvedChunk = await Promise.all(
@@ -896,7 +906,7 @@ export async function scanDependencies(
       }
     }
 
-    const PY_BATCH_SIZE = 15;
+    const PY_BATCH_SIZE = 8;
     for (let i = 0; i < pyEntries.length; i += PY_BATCH_SIZE) {
       const chunk = pyEntries.slice(i, i + PY_BATCH_SIZE);
       const resolvedChunk = await Promise.all(
@@ -986,7 +996,7 @@ export async function scanDependencies(
   }
 
   const idList = Array.from(allVulnIds);
-  const detailChunkSize = 10;
+  const detailChunkSize = 8;
   for (let i = 0; i < idList.length; i += detailChunkSize) {
     const chunk = idList.slice(i, i + detailChunkSize);
     await Promise.all(chunk.map((id) => fetchOsvDetail(id)));

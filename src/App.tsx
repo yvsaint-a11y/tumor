@@ -118,7 +118,35 @@ function classifyScanError(rawError: string, status?: number): ScanErrorInfo {
     };
   }
 
-  // 6. Network or server error
+  // 5. Server busy (HTTP 503)
+  if (
+    status === 503 ||
+    errLower.includes("we're busy") ||
+    errLower.includes('busy, try again')
+  ) {
+    return {
+      type: 'server_error',
+      title: "We're busy, try again in a minute.",
+      whatHappened: 'Other scans are currently in progress and the queue is at capacity.',
+      whatNext: 'Please wait a minute for current scans to finish and try running your scan again.',
+      actionText: 'Try again',
+      actionType: 'retry',
+    };
+  }
+
+  // 6. Scan timed out (HTTP 408)
+  if (status === 408 || errLower.includes('timed out') || errLower.includes('60 seconds')) {
+    return {
+      type: 'server_error',
+      title: 'Scan timed out',
+      whatHappened: 'The repository scan took longer than the 60-second limit.',
+      whatNext: 'Try scanning a smaller repository or choose one of our instant sample apps.',
+      actionText: 'Try a sample app',
+      actionType: 'sample',
+    };
+  }
+
+  // 7. Network or general server error
   return {
     type: 'server_error',
     title: 'Server error',

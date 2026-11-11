@@ -377,6 +377,53 @@ export async function checkGeminiHealth(forceRefresh = false): Promise<GeminiHea
   }
 }
 
+// Requirement 9: Concurrency lock (at most 2 concurrent Gemini requests)
+let activeGeminiRequests = 0;
+const MAX_CONCURRENT_GEMINI = 2;
+const geminiQueue: Array<() => void> = [];
+
+async function acquireGeminiSlot(): Promise<() => void> {
+  if (activeGeminiRequests < MAX_CONCURRENT_GEMINI) {
+    activeGeminiRequests++;
+    return releaseGeminiSlot;
+  }
+  return new Promise<() => void>((resolve) => {
+    geminiQueue.push(() => {
+      activeGeminiRequests++;
+      resolve(releaseGeminiSlot);
+    });
+  });
+}
+
+function releaseGeminiSlot(): void {
+  activeGeminiRequests--;
+  const next = geminiQueue.shift();
+  if (next) {
+    next();
+  }
+}
+
+// Requirement 9: Daily request counter (GEMINI_DAILY_LIMIT, default 15)
+let dailyGeminiCount = 0;
+let currentDayUtc = new Date().toISOString().slice(0, 10);
+
+export function checkAndIncrementGeminiDailyLimit(): boolean {
+  const today = new Date().toISOString().slice(0, 10);
+  if (today !== currentDayUtc) {
+    currentDayUtc = today;
+    dailyGeminiCount = 0;
+  }
+  const limit = parseInt(process.env.GEMINI_DAILY_LIMIT || '15', 10);
+  if (dailyGeminiCount >= limit) {
+    console.warn(
+      `[Gemini Daily Limit Tripped] Daily limit of ${limit} reached for ${currentDayUtc}. Using built-in explanations without calling Gemini.`
+    );
+    return false;
+  }
+  dailyGeminiCount++;
+  return true;
+}
+
 export async function writeReportWithGemini(
   repoName: string,
   stack: StackDetection,
@@ -412,6 +459,19 @@ export async function writeReportWithGemini(
     );
   }
 
+  // Check daily request counter
+  if (!checkAndIncrementGeminiDailyLimit()) {
+    return generateLocalFallbackExplanation(
+      repoName,
+      stack,
+      rubric,
+      findings,
+      'Daily limit reached',
+      configuredModel
+    );
+  }
+
+  const releaseSlot = await acquireGeminiSlot();
   try {
     const ai = new GoogleGenAI({
       apiKey,
@@ -603,6 +663,8 @@ ${JSON.stringify(untrustedSanitizedFindings, null, 2)}`;
       `[${errorType}] ${safeErrorMsg}`,
       configuredModel
     );
+  } finally {
+    releaseSlot();
   }
 }
 

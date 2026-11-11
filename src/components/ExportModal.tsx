@@ -50,7 +50,10 @@ ${report.executiveSummary.vibeAppInsight}
 ## Detailed Findings (${report.findings.length} Total)
 ${report.findings
   .map(
-    (f, idx) => `
+    (f, idx) => {
+      const safeEvidence = (f.evidence || '').replace(/```/g, '` ` `');
+      const safePrompt = (f.explanation?.aiFixPrompt || '').replace(/`/g, "'");
+      return `
 ### ${idx + 1}. [${(f.effectiveSeverity || f.severity).toUpperCase()}] ${f.title}
 - **File:** \`${f.file}:${f.line}\`
 - **Rule ID:** \`${f.ruleId}\`
@@ -62,10 +65,11 @@ ${report.findings
 - **Recommended Action:** ${f.explanation?.nextStep || 'Inspect and fix this file.'}
 - **Code Evidence:**
 \`\`\`
-${f.evidence}
+${safeEvidence}
 \`\`\`
-${f.explanation?.aiFixPrompt ? `\n> **Prompt for Cursor / Lovable:** \`${f.explanation.aiFixPrompt}\`` : ''}
-`
+${safePrompt ? `\n> **Prompt for Cursor / Lovable:** \`${safePrompt}\`` : ''}
+`;
+    }
   )
   .join('\n---\n')}
 

@@ -202,6 +202,26 @@ const SECRET_PATTERNS: SecretPattern[] = [
   },
 ];
 
+export function hasUnmaskedSecrets(text: string): boolean {
+  if (!text) return false;
+  for (const pattern of SECRET_PATTERNS) {
+    const re = new RegExp(pattern.regex.source, pattern.regex.flags);
+    const match = re.exec(text);
+    if (match) {
+      if (pattern.name === 'database_url_password') {
+        const evalRes = evaluateDatabaseUrl(match[0]);
+        if (evalRes.isSecret) return true;
+      } else {
+        const val = match[1] || match[0];
+        if (!isPlaceholderValue(val)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 export function scanSecrets(files: RepoFile[]): Finding[] {
   const findings: Finding[] = [];
   let counter = 0;
