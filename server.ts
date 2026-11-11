@@ -26,6 +26,11 @@ const PORT = Number(process.env.PORT) || 3000;
 // This ensures req.ip resolves to the true client IP from X-Forwarded-For rather than the load balancer
 app.set('trust proxy', 1);
 
+// Liveness probe endpoint: returns {"ok": true} with HTTP 200, no external calls, exempt from rate limits & logging
+app.get('/healthz', (_req: Request, res: Response) => {
+  res.status(200).json({ ok: true });
+});
+
 app.use(express.json({ limit: '10mb' }));
 
 // Task 2: express-rate-limit - 10 scans per hour per real client IP
