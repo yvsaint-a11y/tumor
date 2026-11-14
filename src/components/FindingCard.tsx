@@ -11,13 +11,23 @@ import {
   ExternalLink,
 } from 'lucide-react';
 
+import { buildFalsePositiveIssueUrl } from '../config.js';
+
 interface FindingCardProps {
   finding: Finding;
   repoUrl?: string;
   commitSha?: string;
+  repoName?: string;
+  scannedAt?: string;
 }
 
-export const FindingCard: React.FC<FindingCardProps> = ({ finding, repoUrl, commitSha }) => {
+export const FindingCard: React.FC<FindingCardProps> = ({
+  finding,
+  repoUrl,
+  commitSha,
+  repoName,
+  scannedAt,
+}) => {
   const [isEvidenceOpen, setIsEvidenceOpen] = useState(false);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [copiedEvidence, setCopiedEvidence] = useState(false);
@@ -86,6 +96,17 @@ export const FindingCard: React.FC<FindingCardProps> = ({ finding, repoUrl, comm
   };
 
   const gitHubUrl = getGitHubFileUrl();
+
+  const falsePositiveUrl = buildFalsePositiveIssueUrl({
+    ruleId: finding.ruleId,
+    repoName,
+    findingTitle: finding.title,
+    repoUrl,
+    commitSha,
+    file: finding.file,
+    line: finding.line,
+    scannedAt,
+  });
 
   return (
     <div className="p-4 sm:p-5 rounded-lg bg-[#1D1713] border border-[#382D25] text-left">
@@ -163,8 +184,8 @@ export const FindingCard: React.FC<FindingCardProps> = ({ finding, repoUrl, comm
         </div>
       )}
 
-      {/* Collapsed Evidence Section */}
-      <div className="mt-3 pt-3 border-t border-[#382D25]">
+      {/* Collapsed Evidence Section & Quiet False Positive Link */}
+      <div className="mt-3 pt-3 border-t border-[#382D25] flex items-center justify-between flex-wrap gap-2">
         <button
           type="button"
           onClick={() => setIsEvidenceOpen(!isEvidenceOpen)}
@@ -177,6 +198,17 @@ export const FindingCard: React.FC<FindingCardProps> = ({ finding, repoUrl, comm
             }`}
           />
         </button>
+
+        <a
+          href={falsePositiveUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[11px] text-[#8C8379] hover:text-[#A39382] hover:underline inline-flex items-center gap-1 transition font-sans"
+        >
+          <span>Report a false positive</span>
+          <ExternalLink className="w-2.5 h-2.5" />
+        </a>
+      </div>
 
         {isEvidenceOpen && (
           <div className="mt-3 space-y-2.5">
@@ -248,6 +280,5 @@ export const FindingCard: React.FC<FindingCardProps> = ({ finding, repoUrl, comm
           </div>
         )}
       </div>
-    </div>
   );
 };

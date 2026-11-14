@@ -80,7 +80,19 @@ export async function saveSharedReport(report: ScanReport): Promise<string | nul
   // Requirement 3: Expiry 30 days
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
-  const { error } = await client.from('shared_reports').insert({
+  // Server Requirement 2: Wrap saveSharedReport in a 3-second timeout.
+  // If it exceeds that or fails, return scan without shareId and log it; never delay or fail the scan.
+  const timeoutMs = 3000;
+  let timer: NodeJS.Timeout;
+  const timeoutPromise = new Promise<{ error: any }>((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error('Supabase save operation timed out after 3000ms');
+      err.name = 'TimeoutError';
+      reject(err);
+    }, timeoutMs);
+  });
+
+  const insertPromise = client.from('shared_reports').insert({
     id,
     repo_url: report.repoUrl,
     commit_sha: report.commitSha || 'latest',
@@ -89,16 +101,25 @@ export async function saveSharedReport(report: ScanReport): Promise<string | nul
     view_count: 0,
   });
 
-  if (error) {
-    console.error('[Shareable Report Error] Failed to insert shared report into Supabase:', error.message || error);
+  try {
+    const { error } = await Promise.race([insertPromise, timeoutPromise]).finally(() => {
+      clearTimeout(timer);
+    });
+
+    if (error) {
+      console.warn('[Shareable Report Error] Failed to insert shared report into Supabase:', error.message || error);
+      return null;
+    }
+
+    return id;
+  } catch (err: any) {
+    console.warn('[Shareable Report Error] Supabase save timed out or failed:', err?.message || err);
     return null;
   }
-
-  return id;
 }
 
 export type FetchSharedResult =
-  | { status: 200; report: ScanReport }
+  | { status: 200; report: ScanReport; expiresAt?: string }
   | { status: 400; error: string }
   | { status: 404; error: string }
   | { status: 410; error: string }
@@ -144,7 +165,7 @@ export async function fetchSharedReport(id: string): Promise<FetchSharedResult> 
     console.warn('[Shareable Report] Failed to increment view_count:', updateErr?.message || updateErr);
   }
 
-  return { status: 200, report: data.report };
+  return { status: 200, report: data.report, expiresAt: data.expires_at };
 }
 
 export async function keepaliveSharedReports(): Promise<{ ok: boolean }> {
@@ -154,11 +175,25 @@ export async function keepaliveSharedReports(): Promise<{ ok: boolean }> {
   }
 
   try {
-    // Requirement 6: running a trivial query so an external cron can keep the Supabase project active
+    // Touch table to keep project active
     await client.from('shared_reports').select('id').limit(1);
+
+    // Server Requirement 1: In GET /api/shared-keepalive, also delete up to 500 rows from shared_reports where expires_at < now()
+    const nowIso = new Date().toISOString();
+    const { data: expiredRows } = await client
+      .from('shared_reports')
+      .select('id')
+      .lt('expires_at', nowIso)
+      .limit(500);
+
+    if (expiredRows && expiredRows.length > 0) {
+      const ids = expiredRows.map((r: any) => r.id);
+      await client.from('shared_reports').delete().in('id', ids);
+    }
+
     return { ok: true };
   } catch (err: any) {
-    console.warn('[Shareable Report Keepalive] Query error:', err?.message || err);
+    console.warn('[Shareable Report Keepalive] Query/cleanup error:', err?.message || err);
     return { ok: true };
   }
 }

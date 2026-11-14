@@ -21,8 +21,10 @@ import {
   Info,
   CheckCircle2,
   FileCode,
-  ArrowLeft
+  ArrowLeft,
+  Share2
 } from 'lucide-react';
+import { buildRemovalIssueUrl } from './config.js';
 
 interface SampleApp {
   id: string;
@@ -185,6 +187,125 @@ export default function App() {
   const [fixNowLimit, setFixNowLimit] = useState(5);
   const [fixSoonLimit, setFixSoonLimit] = useState(5);
   const [worthKnowingLimit, setWorthKnowingLimit] = useState(5);
+
+  // Shared view state (/r/:id)
+  const [isSharedView, setIsSharedView] = useState(false);
+  const [sharedId, setSharedId] = useState<string | null>(null);
+  const [sharedLoading, setSharedLoading] = useState(false);
+  const [sharedError, setSharedError] = useState<{ title: string; message: string; status?: number } | null>(null);
+  const [sharedExpiresAt, setSharedExpiresAt] = useState<string | null>(null);
+  const [copiedShareLink, setCopiedShareLink] = useState(false);
+
+  // Helper to format ISO dates nicely
+  const formatReportDate = (isoString?: string): string => {
+    if (!isoString) return 'recently';
+    try {
+      const d = new Date(isoString);
+      if (isNaN(d.getTime())) return isoString;
+      return d.toLocaleDateString(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      });
+    } catch {
+      return isoString;
+    }
+  };
+
+  const handleCopyShareLink = async (shareIdToCopy: string) => {
+    const link = `${window.location.origin}/r/${shareIdToCopy}`;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(link);
+      } else {
+        const textArea = document.createElement('textarea');
+        textArea.value = link;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-9999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+      }
+      setCopiedShareLink(true);
+      setTimeout(() => setCopiedShareLink(false), 2500);
+    } catch (e) {
+      console.error('Failed to copy share link:', e);
+    }
+  };
+
+  const handleGoHome = () => {
+    setActiveReport(null);
+    setIsSharedView(false);
+    setSharedId(null);
+    setSharedError(null);
+    setSharedExpiresAt(null);
+    if (window.location.pathname.startsWith('/r/')) {
+      window.history.pushState({}, '', '/');
+    }
+  };
+
+  // Requirement 4: Shared view route (/r/:id) detection on mount
+  useEffect(() => {
+    const pathname = window.location.pathname;
+    const match = pathname.match(/^\/r\/([A-Za-z0-9_-]+)$/);
+    if (!match) return;
+
+    const id = match[1];
+    if (id.length !== 12) {
+      setIsSharedView(true);
+      setSharedError({
+        title: "This link doesn't exist",
+        message: "The shared report link is incomplete or invalid.",
+        status: 404,
+      });
+      return;
+    }
+
+    setIsSharedView(true);
+    setSharedId(id);
+    setSharedLoading(true);
+
+    async function loadShared() {
+      try {
+        const res = await fetch(`/api/shared/${id}`);
+        if (res.status === 200) {
+          const data = await res.json();
+          setActiveReport(data.report);
+          setSharedExpiresAt(data.expiresAt || null);
+          // CRITICAL: Do NOT write shared reports to localStorage history
+        } else if (res.status === 404) {
+          setSharedError({
+            title: "This link doesn't exist",
+            message: "The shared report may have been removed or the link is incorrect.",
+            status: 404,
+          });
+        } else if (res.status === 410) {
+          setSharedError({
+            title: "This shared report has expired",
+            message: "Shared audit reports expire automatically after 30 days.",
+            status: 410,
+          });
+        } else {
+          setSharedError({
+            title: "Couldn't load report",
+            message: "Something went wrong loading this shared report. Please check your connection and try again.",
+            status: res.status,
+          });
+        }
+      } catch {
+        setSharedError({
+          title: "Network error",
+          message: "Unable to reach the server. Please check your internet connection.",
+        });
+      } finally {
+        setSharedLoading(false);
+      }
+    }
+
+    loadShared();
+  }, []);
 
   // Load history from localStorage
   useEffect(() => {
@@ -364,10 +485,53 @@ export default function App() {
         onOpenRules={() => setShowRulesModal(true)}
         onOpenHistory={() => setShowHistoryModal(true)}
         historyCount={history.length}
-        onGoHome={() => setActiveReport(null)}
+        onGoHome={handleGoHome}
       />
 
       <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-8">
+        {/* Shared Report Loading State (Requirement 4) */}
+        {sharedLoading && (
+          <div className="max-w-xl mx-auto my-16 p-8 rounded-xl bg-[#1D1713] border border-[#382D25] text-center font-sans animate-fade-in shadow-md">
+            <div className="w-10 h-10 mx-auto mb-3 rounded-full bg-[#382D25]/40 flex items-center justify-center">
+              <RefreshCw className="w-5 h-5 text-[#A39382] animate-spin" />
+            </div>
+            <h3 className="text-base font-headline font-medium text-[#F2E9DF]">
+              Loading shared report...
+            </h3>
+            <p className="text-xs text-[#A39382] mt-1.5 font-sans">
+              Retrieving the verified audit report.
+            </p>
+          </div>
+        )}
+
+        {/* Shared Report Error State (Requirement 4: 404, 410, Network Error) */}
+        {sharedError && (
+          <div className="max-w-xl mx-auto my-16 p-6 sm:p-8 rounded-xl bg-[#1D1713] border border-[#382D25] text-left font-sans animate-fade-in shadow-md">
+            <div className="flex items-start gap-3">
+              <div className="p-1.5 rounded-lg bg-[#382D25]/40 text-[#A39382] shrink-0 mt-0.5">
+                <CircleAlert className="w-4 h-4 text-[#D96B43]" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-base font-headline font-medium text-[#F2E9DF] leading-snug">
+                  {sharedError.title}
+                </h3>
+                <p className="text-xs text-[#A39382] mt-1.5 leading-relaxed font-sans">
+                  {sharedError.message}
+                </p>
+                <div className="mt-4 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleGoHome}
+                    className="px-4 py-2 rounded-lg text-xs font-medium bg-[#F2E9DF] text-[#14100D] hover:bg-[#F2E9DF]/90 transition cursor-pointer"
+                  >
+                    Scan your own repo
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Error State Banner */}
         {scanErrorInfo && (
           <div className="max-w-xl mx-auto p-4 sm:p-5 rounded-xl bg-[#1D1713] border border-[#382D25] text-left font-sans mb-6 shadow-md animate-fade-in">
@@ -426,8 +590,8 @@ export default function App() {
           <PipelineProgress currentStage={scanStage} statusText={scanStatusText} />
         )}
 
-        {/* Home Screen (Shown when no active report and not scanning) */}
-        {!activeReport && !isScanning && (
+        {/* Home Screen (Shown when no active report, not scanning, not loading shared report, and no shared error) */}
+        {!activeReport && !isScanning && !sharedLoading && !sharedError && (
           <div className="relative">
             <div className="absolute inset-0 hero-radial-glow pointer-events-none -z-10" />
 
@@ -691,11 +855,37 @@ export default function App() {
         {/* Report Output View */}
         {activeReport && !isScanning && (
           <div className="mt-6 space-y-6 animate-fade-in">
-            {/* Top Bar: repo name, branch, short commit SHA, scan time, "Scan again", "Export" */}
+            {/* Calm Shared Report Banner (Requirement 4) */}
+            {isSharedView && (
+              <div className="p-3.5 sm:p-4 rounded-xl bg-[#1D1713] border border-[#382D25] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-sans">
+                <div className="flex items-center gap-2 text-[#A39382] flex-wrap">
+                  <span className="w-2 h-2 rounded-full bg-[#A39382]/60 shrink-0" />
+                  <span>
+                    Shared report from{' '}
+                    <strong className="text-[#F2E9DF] font-medium">{formatReportDate(activeReport.scannedAt)}</strong>.
+                    {sharedExpiresAt && (
+                      <>
+                        {' '}Expires{' '}
+                        <strong className="text-[#F2E9DF] font-medium">{formatReportDate(sharedExpiresAt)}</strong>.
+                      </>
+                    )}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleGoHome}
+                  className="px-3.5 py-1.5 rounded-lg text-xs font-medium bg-[#F2E9DF] text-[#14100D] hover:bg-[#F2E9DF]/90 transition cursor-pointer self-start sm:self-auto shrink-0"
+                >
+                  Scan your own repo
+                </button>
+              </div>
+            )}
+
+            {/* Top Bar: repo name, branch, short commit SHA, scan time, "Scan again", "Export", "Copy share link" */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#382D25]">
               <div className="flex items-center gap-4 sm:gap-6 text-xs text-[#A39382] flex-wrap font-sans">
                 <button
-                  onClick={() => setActiveReport(null)}
+                  onClick={handleGoHome}
                   className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs text-[#A39382] hover:text-[#F2E9DF] bg-[#1D1713] border border-[#382D25] hover:border-[#A39382]/40 transition cursor-pointer"
                 >
                   <ArrowLeft className="w-3.5 h-3.5" />
@@ -709,22 +899,56 @@ export default function App() {
                 <span className="font-sans text-[#A39382]">{new Date(activeReport.scannedAt).toLocaleTimeString()}</span>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  onClick={() =>
-                    triggerScan({
-                      repoUrl: activeReport.repoUrl,
-                      sampleId: activeReport.isSampleRepo
-                        ? samples.find((s) => s.name === activeReport.repoName)?.id
-                        : undefined,
-                      forceFresh: true,
-                    })
-                  }
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-[#1D1713] border border-[#382D25] hover:border-[#A39382]/50 text-[#F2E9DF] transition cursor-pointer font-sans"
-                >
-                  <RefreshCw className="w-3.5 h-3.5 text-[#A39382]" />
-                  <span>Scan again</span>
-                </button>
+              <div className="flex items-center gap-2 flex-wrap shrink-0">
+                {/* Share Link Controls (Requirement 3):
+                    When scan response has shareId (or in sharedView with sharedId), show "Copy share link" button that copies {origin}/r/{shareId} and shows "Link copied. Expires in 30 days."
+                    For real scans with no shareId, show one quiet line "Sharing isn't available for this report."
+                    Hide both for sample demos. */}
+                {!activeReport.isSampleRepo && (
+                  (activeReport.shareId || (isSharedView && sharedId)) ? (
+                    <button
+                      type="button"
+                      onClick={() => handleCopyShareLink(activeReport.shareId || sharedId || '')}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-[#1D1713] border border-[#382D25] hover:border-[#A39382]/50 text-[#F2E9DF] transition cursor-pointer font-sans"
+                    >
+                      {copiedShareLink ? (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                          <span className="text-emerald-400">Link copied. Expires in 30 days.</span>
+                        </>
+                      ) : (
+                        <>
+                          <Share2 className="w-3.5 h-3.5 text-[#A39382]" />
+                          <span>Copy share link</span>
+                        </>
+                      )}
+                    </button>
+                  ) : (
+                    <span className="text-xs text-[#8C8379] font-sans px-1">
+                      Sharing isn't available for this report.
+                    </span>
+                  )
+                )}
+
+                {/* Hide "Scan again" in shared view (Requirement 4) */}
+                {!isSharedView && (
+                  <button
+                    onClick={() =>
+                      triggerScan({
+                        repoUrl: activeReport.repoUrl,
+                        sampleId: activeReport.isSampleRepo
+                          ? samples.find((s) => s.name === activeReport.repoName)?.id
+                          : undefined,
+                        forceFresh: true,
+                      })
+                    }
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-[#1D1713] border border-[#382D25] hover:border-[#A39382]/50 text-[#F2E9DF] transition cursor-pointer font-sans"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-[#A39382]" />
+                    <span>Scan again</span>
+                  </button>
+                )}
+
                 <button
                   onClick={() => setShowExportModal(true)}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-[#1D1713] border border-[#382D25] hover:border-[#A39382]/50 text-[#F2E9DF] transition cursor-pointer font-sans"
@@ -961,6 +1185,8 @@ export default function App() {
                             finding={finding}
                             repoUrl={activeReport.repoUrl}
                             commitSha={activeReport.commitSha}
+                            repoName={activeReport.repoName}
+                            scannedAt={activeReport.scannedAt}
                           />
                         ))}
                       </div>
@@ -1001,6 +1227,8 @@ export default function App() {
                             finding={finding}
                             repoUrl={activeReport.repoUrl}
                             commitSha={activeReport.commitSha}
+                            repoName={activeReport.repoName}
+                            scannedAt={activeReport.scannedAt}
                           />
                         ))}
                       </div>
@@ -1041,6 +1269,8 @@ export default function App() {
                             finding={finding}
                             repoUrl={activeReport.repoUrl}
                             commitSha={activeReport.commitSha}
+                            repoName={activeReport.repoName}
+                            scannedAt={activeReport.scannedAt}
                           />
                         ))}
                       </div>
@@ -1071,7 +1301,21 @@ export default function App() {
           <p>
             Tumorr • Deterministic inspection for vibe-coded applications
           </p>
-          <div className="flex items-center gap-4 text-[#A39382]">
+          <div className="flex items-center gap-4 text-[#A39382] flex-wrap justify-center">
+            {/* Requirement 6: Removal Request link in Shared View Footer */}
+            {isSharedView && (sharedId || activeReport?.shareId) && (
+              <>
+                <a
+                  href={buildRemovalIssueUrl(sharedId || activeReport?.shareId || '')}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#8C8379] hover:text-[#A39382] transition underline decoration-[#382D25] hover:decoration-[#A39382]"
+                >
+                  Request removal
+                </a>
+                <span className="text-[#382D25]">•</span>
+              </>
+            )}
             <button
               onClick={() => setShowRulesModal(true)}
               className="hover:text-[#F2E9DF] transition cursor-pointer"
@@ -1099,7 +1343,7 @@ export default function App() {
         history={history}
         onSelectReport={(rep) => setActiveReport(rep)}
         onClearHistory={handleClearHistory}
-        onGoHome={() => setActiveReport(null)}
+        onGoHome={handleGoHome}
       />
     </div>
   );
